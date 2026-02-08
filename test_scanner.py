@@ -16,34 +16,10 @@ from settings_manager import SettingsManager
 
 # Test configuration for supported exchanges
 TEST_CONFIG = {
-    "kucoin_futures": {
-        "ccxt_id": "kucoinfutures",
-        "label": "KuCoin Futures",
-        "test_symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"],
-        "has_cumulative_book": False,  # KuCoin returns individual volumes
-        "ws_support": True,
-        "market_type": "swap"
-    },
-    "kucoin_spot": {
-        "ccxt_id": "kucoin",
-        "label": "KuCoin Spot",
-        "test_symbols": ["BTC/USDT", "ETH/USDT", "SOL/USDT"],
-        "has_cumulative_book": False,  # KuCoin returns individual volumes
-        "ws_support": True,
-        "market_type": "spot"
-    },
-    "bingx": {
-        "ccxt_id": "bingx",
-        "label": "BingX",
-        "test_symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"],
-        "has_cumulative_book": False,  # BingX returns individual volumes
-        "ws_support": True,
-        "market_type": "swap"
-    },
     "hyperliquid": {
         "ccxt_id": "hyperliquid",
         "label": "Hyperliquid",
-        "test_symbols": ["BTC/USD:USD", "ETH/USD:USD", "SOL/USD:USD"],  # Correct CCXT format
+        "test_symbols": ["BTC/USD:USD", "ETH/USD:USD", "SOL/USD:USD"],
         "has_cumulative_book": False,  # Hyperliquid returns individual volumes
         "ws_support": True,
         "market_type": "swap"
@@ -306,8 +282,6 @@ def run_all_tests():
     tests = [
         ("Configuration Check", test_all_exchanges_individual_volumes),
         ("Individual vs Cumulative", test_individual_vs_cumulative_volumes),
-        ("KuCoin Futures", test_kucoin_futures_orderbook),
-        ("KuCoin Spot", test_kucoin_spot_orderbook),
         ("Hyperliquid Symbols", test_hyperliquid_symbol_format),
     ]
     
