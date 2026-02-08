@@ -4,7 +4,10 @@ Complete management through inline buttons.
 """
 
 import logging
+import time
+from collections import defaultdict
 from functools import wraps
+from typing import Dict, Tuple
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -32,6 +35,92 @@ logger = logging.getLogger(__name__)
     AWAITING_EXCHANGE_LIFETIME,
     AWAITING_GLOBAL_TICKER_INPUT,
 ) = range(7)
+
+
+# ===========================
+# Rate Limiter
+# ===========================
+
+class RateLimiter:
+    """Rate limiter to prevent abuse of bot commands."""
+    def __init__(self, max_requests: int = 30, window: int = 60):
+        self.max_requests = max_requests
+        self.window = window
+        self.requests: Dict[int, list] = defaultdict(list)
+    
+    def is_allowed(self, user_id: int) -> bool:
+        """Check if user is allowed to make a request."""
+        now = time.time()
+        self.requests[user_id] = [
+            req_time for req_time in self.requests[user_id]
+            if now - req_time < self.window
+        ]
+        
+        if len(self.requests[user_id]) >= self.max_requests:
+            return False
+        
+        self.requests[user_id].append(now)
+        return True
+
+
+rate_limiter = RateLimiter(max_requests=30, window=60)
+
+
+# ===========================
+# Input Validation
+# ===========================
+
+def validate_input(text: str, input_type: str) -> Tuple[bool, str]:
+    """
+    Validate user input for security and format.
+    
+    Args:
+        text: User input text
+        input_type: Type of input - 'size', 'distance', 'ticker'
+    
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    # Check for dangerous characters
+    dangerous_chars = ["'", '"', ";", "--", "/*", "*/", "<", ">"]
+    for char in dangerous_chars:
+        if char in text:
+            return False, f"❌ Недопустимый символ: {char}"
+    
+    # Clean input
+    cleaned = text.strip().replace(",", "").replace(" ", "")
+    
+    if input_type in ['size', 'lifetime']:
+        # Validate size/lifetime input
+        try:
+            value = int(cleaned)
+            if value < 0 or value > 1_000_000_000:
+                return False, "❌ Значение должно быть от 0 до 1,000,000,000"
+            return True, ""
+        except ValueError:
+            return False, "❌ Введите корректное целое число"
+    
+    elif input_type == 'distance':
+        # Validate distance input
+        try:
+            value = float(cleaned.replace(".", "."))
+            if value < 0.01 or value > 10.0:
+                return False, "❌ Расстояние должно быть от 0.01% до 10%"
+            return True, ""
+        except ValueError:
+            return False, "❌ Введите корректное число"
+    
+    elif input_type == 'ticker':
+        # Validate ticker symbol
+        if not cleaned:
+            return False, "❌ Тикер не может быть пустым"
+        if len(cleaned) > 20:
+            return False, "❌ Тикер слишком длинный (макс 20 символов)"
+        if not cleaned.isalnum():
+            return False, "❌ Тикер должен содержать только буквы и цифры"
+        return True, ""
+    
+    return False, "❌ Неизвестный тип ввода"
 
 
 def authorized_only(func):
@@ -447,6 +536,16 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle all callback queries."""
     query = update.callback_query
+    
+    # Rate limiting check
+    user_id = query.from_user.id
+    if not rate_limiter.is_allowed(user_id):
+        await query.answer(
+            "⚠️ Слишком много запросов. Подождите минуту.",
+            show_alert=True
+        )
+        return ConversationHandler.END
+    
     await query.answer()
     
     settings = context.bot_data["settings"]
@@ -635,7 +734,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return ConversationHandler.END
     
     elif data.startswith("action:del_exch_ticker:"):
-        parts = data.split(":")
+        parts = data.split(":", maxsplit=4)
+        if len(parts) < 5:
+            logger.error(f"Invalid callback data format: {data}")
+            await query.edit_message_text("❌ Ошибка формата данных", reply_markup=get_cancel_keyboard())
+            return ConversationHandler.END
         exchange = parts[3]
         ticker = parts[4]
         settings.remove_exchange_ticker_override(exchange, ticker)
@@ -738,7 +841,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return ConversationHandler.END
     
     elif data.startswith("action:del_exch_bl:"):
-        parts = data.split(":")
+        parts = data.split(":", maxsplit=4)
+        if len(parts) < 5:
+            logger.error(f"Invalid callback data format: {data}")
+            await query.edit_message_text("❌ Ошибка формата данных", reply_markup=get_cancel_keyboard())
+            return ConversationHandler.END
         exchange = parts[3]
         ticker = parts[4]
         settings.remove_exchange_blacklist(exchange, ticker)
@@ -811,6 +918,13 @@ async def handle_global_dist_input(update: Update, context: ContextTypes.DEFAULT
     """Handle global distance input."""
     settings = context.bot_data["settings"]
     
+    # Validate input
+    is_valid, error_msg = validate_input(update.message.text, 'distance')
+    if not is_valid:
+        text = f"{error_msg}\n\nПопробуйте ещё раз или используйте /menu для возврата в меню"
+        await _send_or_edit(update, context, text, reply_markup=get_cancel_keyboard())
+        return AWAITING_GLOBAL_DIST
+    
     try:
         value = float(update.message.text.replace(",", ".").replace(" ", ""))
         settings.global_distance = value
@@ -826,7 +940,7 @@ async def handle_global_dist_input(update: Update, context: ContextTypes.DEFAULT
             "❌ Ошибка: введите корректное число\n\n"
             f"Попробуйте ещё раз или используйте /menu для возврата в меню"
         )
-        await _send_or_edit(update, context, text)
+        await _send_or_edit(update, context, text, reply_markup=get_cancel_keyboard())
         return AWAITING_GLOBAL_DIST
 
 
@@ -840,6 +954,13 @@ async def handle_exchange_min_input(update: Update, context: ContextTypes.DEFAUL
         text = "❌ Ошибка: биржа не указана. Используйте /menu"
         await _send_or_edit(update, context, text)
         return ConversationHandler.END
+    
+    # Validate input
+    is_valid, error_msg = validate_input(update.message.text, 'size')
+    if not is_valid:
+        text = f"{error_msg}\n\nПопробуйте ещё раз или используйте /menu для возврата в меню"
+        await _send_or_edit(update, context, text, reply_markup=get_cancel_keyboard())
+        return AWAITING_EXCHANGE_MIN
     
     try:
         value = int(update.message.text.replace(",", "").replace(" ", ""))
@@ -857,7 +978,7 @@ async def handle_exchange_min_input(update: Update, context: ContextTypes.DEFAUL
             "❌ Ошибка: введите корректное число\n\n"
             f"Попробуйте ещё раз или используйте /menu для возврата в меню"
         )
-        await _send_or_edit(update, context, text)
+        await _send_or_edit(update, context, text, reply_markup=get_cancel_keyboard())
         return AWAITING_EXCHANGE_MIN
 
 
@@ -871,6 +992,13 @@ async def handle_exchange_lifetime_input(update: Update, context: ContextTypes.D
         text = "❌ Ошибка: биржа не указана. Используйте /menu"
         await _send_or_edit(update, context, text)
         return ConversationHandler.END
+    
+    # Validate input
+    is_valid, error_msg = validate_input(update.message.text, 'lifetime')
+    if not is_valid:
+        text = f"{error_msg}\n\nПопробуйте ещё раз или используйте /menu для возврата в меню"
+        await _send_or_edit(update, context, text, reply_markup=get_cancel_keyboard())
+        return AWAITING_EXCHANGE_LIFETIME
     
     try:
         value = int(update.message.text.replace(",", "").replace(" ", ""))
@@ -888,7 +1016,7 @@ async def handle_exchange_lifetime_input(update: Update, context: ContextTypes.D
             "❌ Ошибка: введите корректное число\n\n"
             f"Попробуйте ещё раз или используйте /menu для возврата в меню"
         )
-        await _send_or_edit(update, context, text)
+        await _send_or_edit(update, context, text, reply_markup=get_cancel_keyboard())
         return AWAITING_EXCHANGE_LIFETIME
 
 
@@ -938,12 +1066,11 @@ async def handle_global_blacklist_add_input(update: Update, context: ContextType
     
     ticker = update.message.text.strip().upper()
     
-    if not ticker:
-        text = (
-            "❌ Ошибка: введите корректный тикер\n\n"
-            "Попробуйте ещё раз или используйте /menu для возврата в меню"
-        )
-        await _send_or_edit(update, context, text)
+    # Validate ticker input
+    is_valid, error_msg = validate_input(ticker, 'ticker')
+    if not is_valid:
+        text = f"{error_msg}\n\nПопробуйте ещё раз или используйте /menu для возврата в меню"
+        await _send_or_edit(update, context, text, reply_markup=get_cancel_keyboard())
         return AWAITING_GLOBAL_BLACKLIST_ADD
     
     settings.add_global_blacklist(ticker)
@@ -1001,12 +1128,11 @@ async def handle_exchange_blacklist_add_input(update: Update, context: ContextTy
     
     ticker = update.message.text.strip().upper()
     
-    if not ticker:
-        text = (
-            "❌ Ошибка: введите корректный тикер\n\n"
-            "Попробуйте ещё раз или используйте /menu для возврата в меню"
-        )
-        await _send_or_edit(update, context, text)
+    # Validate ticker input
+    is_valid, error_msg = validate_input(ticker, 'ticker')
+    if not is_valid:
+        text = f"{error_msg}\n\nПопробуйте ещё раз или используйте /menu для возврата в меню"
+        await _send_or_edit(update, context, text, reply_markup=get_cancel_keyboard())
         return AWAITING_EXCHANGE_BLACKLIST_ADD
     
     settings.add_exchange_blacklist(exchange, ticker)
