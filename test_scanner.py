@@ -300,7 +300,7 @@ def test_all_exchanges_individual_volumes():
 def run_all_tests():
     """Run all scanner tests."""
     print("=" * 80)
-    print("COMPREHENSIVE EXCHANGE SCANNER TESTS")
+    print("Comprehensive Exchange Scanner Tests")
     print("=" * 80)
     
     tests = [
