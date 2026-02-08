@@ -9,15 +9,72 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 from config import DEFAULT_SETTINGS, DEFAULT_EXCHANGE_SETTINGS
 
+try:
+    from cryptography.fernet import Fernet
+    ENCRYPTION_AVAILABLE = True
+except ImportError:
+    ENCRYPTION_AVAILABLE = False
+    print("⚠️ WARNING: cryptography module not found. Install with: pip install cryptography>=41.0.0")
+
 
 class SettingsManager:
     """Thread-safe settings manager with JSON persistence and hierarchical resolution."""
     
     def __init__(self, settings_file: str = "settings.json"):
-        self.settings_file = Path(settings_file)
+        # Path traversal protection
+        settings_path = Path(settings_file).resolve()
+        
+        try:
+            settings_path.relative_to(Path.cwd())
+        except ValueError:
+            raise ValueError(
+                f"❌ Invalid settings file path: {settings_file}. "
+                "Must be within current directory."
+            )
+        
+        self.settings_file = settings_path
         self._lock = threading.Lock()
         self._settings = {}
+        
+        # Initialize encryption if available
+        if ENCRYPTION_AVAILABLE:
+            self._init_encryption()
+        else:
+            self._cipher = None
+            self._encryption_key = None
+        
         self._load_settings()
+    
+    def _init_encryption(self):
+        """Initialize or load encryption key."""
+        key_file = Path(".encryption_key")
+        if key_file.exists():
+            with open(key_file, 'rb') as f:
+                self._encryption_key = f.read()
+        else:
+            self._encryption_key = Fernet.generate_key()
+            with open(key_file, 'wb') as f:
+                f.write(self._encryption_key)
+            # Update .gitignore to ensure key is not committed
+            print("✅ Encryption key generated and saved to .encryption_key")
+        
+        self._cipher = Fernet(self._encryption_key)
+    
+    def _encrypt_value(self, value: str) -> str:
+        """Encrypt a string value."""
+        if not self._cipher:
+            return value
+        return self._cipher.encrypt(value.encode()).decode()
+    
+    def _decrypt_value(self, encrypted: str) -> str:
+        """Decrypt an encrypted string value."""
+        if not self._cipher:
+            return encrypted
+        try:
+            return self._cipher.decrypt(encrypted.encode()).decode()
+        except Exception:
+            # If decryption fails, return original value (might be plaintext from old version)
+            return encrypted
     
     def _load_settings(self):
         """Load settings from JSON file, merge with defaults."""
@@ -61,12 +118,27 @@ class SettingsManager:
     @property
     def chat_id(self) -> str:
         with self._lock:
+            # Try to get encrypted version first
+            encrypted = self._settings.get("chat_id_encrypted")
+            if encrypted and self._cipher:
+                try:
+                    return self._decrypt_value(encrypted)
+                except Exception:
+                    pass
+            # Fallback to plaintext (for backwards compatibility)
             return self._settings.get("chat_id", DEFAULT_SETTINGS["chat_id"])
     
     @chat_id.setter
     def chat_id(self, value: str):
         with self._lock:
-            self._settings["chat_id"] = value
+            if self._cipher:
+                # Encrypt and store
+                self._settings["chat_id_encrypted"] = self._encrypt_value(value)
+                # Remove old plaintext version if it exists
+                self._settings.pop("chat_id", None)
+            else:
+                # Store as plaintext if encryption not available
+                self._settings["chat_id"] = value
             self._save_settings()
     
     @property

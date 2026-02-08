@@ -14,6 +14,14 @@ import ccxt.async_support as ccxt_async
 
 logger = logging.getLogger(__name__)
 
+# Try to import tenacity for retry mechanism
+try:
+    from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+    TENACITY_AVAILABLE = True
+except ImportError:
+    TENACITY_AVAILABLE = False
+    logger.info("tenacity not available, using basic retry logic. Install with: pip install tenacity>=8.2.0")
+
 # Try to import ccxt.pro for WebSocket support
 try:
     import ccxt.pro as ccxtpro
@@ -243,6 +251,36 @@ class DensityScanner:
         self._scan_count = 0
         
         logger.info("DensityScanner initialized")
+    
+    async def _fetch_orderbook_with_retry(self, client, symbol: str, depth: int):
+        """
+        Fetch orderbook with retry mechanism using tenacity if available.
+        Falls back to basic retry if tenacity is not installed.
+        """
+        if TENACITY_AVAILABLE:
+            # Use tenacity for advanced retry with exponential backoff
+            @retry(
+                stop=stop_after_attempt(5),
+                wait=wait_exponential(multiplier=1, min=2, max=30),
+                retry=retry_if_exception_type((ccxt_async.NetworkError, ccxt_async.ExchangeNotAvailable)),
+                reraise=True
+            )
+            async def _fetch_with_tenacity():
+                return await client.fetch_order_book(symbol, limit=depth)
+            
+            return await _fetch_with_tenacity()
+        else:
+            # Fallback to basic retry
+            for attempt in range(MAX_RETRIES):
+                try:
+                    return await client.fetch_order_book(symbol, limit=depth)
+                except (ccxt_async.NetworkError, ccxt_async.ExchangeNotAvailable) as e:
+                    if attempt < MAX_RETRIES - 1:
+                        wait_time = min(2 ** attempt, 30)  # Exponential backoff, max 30s
+                        logger.warning(f"Network error fetching {symbol}, retrying in {wait_time}s...")
+                        await asyncio.sleep(wait_time)
+                    else:
+                        raise
     
     async def _initialize_exchanges(self):
         """Initialize exchange clients."""
@@ -691,40 +729,38 @@ class DensityScanner:
             if exchange_name in EXCHANGE_DEPTH_LIMITS:
                 depth = EXCHANGE_DEPTH_LIMITS[exchange_name]
             
-            # Fetch order book with retries
+            # Fetch order book with retries using the retry wrapper
             orderbook = None
-            for attempt in range(MAX_RETRIES):
-                try:
-                    orderbook = await exchange_state.client.fetch_order_book(symbol, limit=depth)
-                    break
-                except ccxt_async.RateLimitExceeded as e:
+            try:
+                orderbook = await self._fetch_orderbook_with_retry(
+                    exchange_state.client,
+                    symbol,
+                    depth
+                )
+            except ccxt_async.RateLimitExceeded:
+                logger.debug(f"Rate limited on {exchange_name}/{symbol}, backing off")
+                await asyncio.sleep(5)
+                return False
+            except ccxt_async.ExchangeError as e:
+                # Handle 429 errors
+                if '429' in str(e):
                     logger.debug(f"Rate limited on {exchange_name}/{symbol}, waiting 5s")
                     await asyncio.sleep(5)
-                    break
-                except (ccxt_async.NetworkError, ccxt_async.ExchangeNotAvailable) as e:
-                    if attempt < MAX_RETRIES - 1:
-                        logger.warning(f"Network error on {exchange_state.label} for {symbol}, retrying...")
-                        await asyncio.sleep(RETRY_DELAY)
-                    else:
-                        logger.error(f"Failed to fetch orderbook for {symbol} on {exchange_state.label}: {e}")
-                        break
-                except ccxt_async.ExchangeError as e:
-                    # Handle 429 errors
-                    if '429' in str(e):
-                        logger.debug(f"Rate limited on {exchange_name}/{symbol}, waiting 5s")
-                        await asyncio.sleep(5)
-                        break
-                    # For BingX, "symbol not found" errors are expected and should be logged as DEBUG
-                    error_msg = str(e).lower()
-                    if exchange_name == "bingx" and ("symbol" in error_msg and "not found" in error_msg):
-                        logger.debug(f"Symbol {symbol} not found on {exchange_state.label}")
-                        break
-                    else:
-                        logger.debug(f"Exchange error {exchange_name}/{symbol}: {e}")
-                        break
-                except ccxt_async.BaseError as e:
-                    logger.debug(f"Exchange error for {symbol} on {exchange_state.label}: {e}")
-                    break
+                    return False
+                # For BingX, "symbol not found" errors are expected and should be logged as DEBUG
+                error_msg = str(e).lower()
+                if exchange_name == "bingx" and ("symbol" in error_msg and "not found" in error_msg):
+                    logger.debug(f"Symbol {symbol} not found on {exchange_state.label}")
+                    return False
+                else:
+                    logger.debug(f"Exchange error {exchange_name}/{symbol}: {e}")
+                    return False
+            except ccxt_async.BaseError as e:
+                logger.debug(f"Exchange error for {symbol} on {exchange_state.label}: {e}")
+                return False
+            except Exception as e:
+                logger.error(f"Failed to fetch orderbook for {symbol}: {e}")
+                return False
             
             if orderbook:
                 # Get contract size for futures/swap markets
