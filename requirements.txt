@@ -1,0 +1,7 @@
+ccxt>=4.0.0
+python-telegram-bot>=20.0
+python-dotenv>=1.0.0
+
+# Optional: WebSocket support for real-time orderbook streaming (significantly faster)
+# Uncomment to enable WebSocket support:
+# ccxt[pro]>=4.0.0
