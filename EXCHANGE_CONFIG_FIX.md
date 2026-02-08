@@ -61,7 +61,7 @@ bid_volume += quote_volume  # Accumulate individual volumes
 | Binance Futures | `BASE/QUOTE:SETTLE` | `BTC/USDT:USDT` |
 | Bybit | `BASE/QUOTE:SETTLE` | `BTC/USDT:USDT` |
 
-**Note:** The `-` format (e.g., `BTC-USD`) may not be supported by CCXT for Hyperliquid. While the scanner code can handle it (lines 402-409 in scanner.py), CCXT's Hyperliquid implementation expects the `:` format for perpetuals.
+**Note:** The `-` format (e.g., `BTC-USD`) may not be supported by CCXT for Hyperliquid. While the scanner code can handle it (see the `_load_markets` method's dash-format handling), CCXT's Hyperliquid implementation expects the `:` format for perpetuals.
 
 ## 📋 Configuration Status
 
@@ -155,7 +155,7 @@ Confirmed that `scanner.py` does NOT contain any cumulative-to-individual conver
 #     asks = convert_cumulative_to_individual(asks)
 ```
 
-### Orderbook Processing (scanner.py lines 440-540)
+### Orderbook Processing (_compute_densities method)
 
 ```python
 def _compute_densities(self, exchange: str, symbol: str, orderbook: dict, ...):

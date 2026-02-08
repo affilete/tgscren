@@ -331,7 +331,7 @@ async def run_all_tests():
     
     # Summary
     print("\n" + "="*70)
-    print("## 📊 Overall Test Summary")
+    print("📊 OVERALL TEST SUMMARY")
     print("="*70)
     
     passed_tests = 0
