@@ -38,12 +38,7 @@ except ValueError as e:
 
 # Supported Exchanges (name -> ccxt_id and label)
 SUPPORTED_EXCHANGES = {
-    "kucoin_futures": {"ccxt_id": "kucoinfutures", "label": "KuCoin Futures"},
-    "kucoin_spot": {"ccxt_id": "kucoin", "label": "KuCoin Spot"},
-    "hyperliquid": {"ccxt_id": "hyperliquid", "label": "HL (Hyperliquid)"},
-    "asterdex": {"ccxt_id": "asterdex", "label": "AsterDEX"},
-    "lither": {"ccxt_id": "lither", "label": "Lither"},
-    "bingx": {"ccxt_id": "bingx", "label": "BingX"},
+    "hyperliquid": {"ccxt_id": "hyperliquid", "label": "Hyperliquid"},
 }
 
 # Default Exchange Settings
@@ -94,12 +89,7 @@ DEFAULT_SETTINGS = {
     "quote_currencies": ["USDT", "USD", "USDC", "BUSD"],  # Supported quote currencies
     "chat_id": DEFAULT_CHAT_ID,
     "exchanges": {
-        "kucoin_futures": {"min_size": 300000, "ticker_overrides": {}, "blacklist": [], "min_lifetime": 0},
-        "kucoin_spot": {"min_size": 500000, "ticker_overrides": {}, "blacklist": [], "min_lifetime": 0},
         "hyperliquid": {"min_size": 1000000, "ticker_overrides": {}, "blacklist": [], "min_lifetime": 0},
-        "asterdex": {"min_size": 200000, "ticker_overrides": {}, "blacklist": [], "min_lifetime": 0},
-        "lither": {"min_size": 200000, "ticker_overrides": {}, "blacklist": [], "min_lifetime": 0},
-        "bingx": {"min_size": 500000, "ticker_overrides": {}, "blacklist": [], "min_lifetime": 0},
     },
 }
 
@@ -129,29 +119,17 @@ EXCHANGE_TIMEOUT = 30000  # 30 seconds in milliseconds
 
 # Exchange-specific depth limits
 EXCHANGE_DEPTH_LIMITS = {
-    "kucoin_spot": 20,  # KuCoin accepts only 20 or 100
-    "kucoin_futures": 20,  # KuCoin Futures accepts only 20 or 100
     "hyperliquid": 20,  # Public API max = 20 levels
 }
 
 # Exchange Trade URLs for clickable links
 EXCHANGE_TRADE_URLS = {
     "hyperliquid": "https://app.hyperliquid.xyz/trade/{symbol}",
-    "kucoin_futures": "https://www.kucoin.com/futures/trade/{symbol}USDT",
-    "kucoin_spot": "https://www.kucoin.com/trade/{symbol}-USDT",
-    "bingx": "https://bingx.com/en/futures/{symbol}USDT/",
-    "asterdex": "https://app.asterdex.com/trade/{symbol}",
-    "lither": "https://app.lither.com/trade/{symbol}",
 }
 
 # Exchange Market Type (PERP or SPOT)
 EXCHANGE_MARKET_TYPE = {
     "hyperliquid": "PERP",
-    "kucoin_futures": "FUTURES",
-    "kucoin_spot": "SPOT",
-    "bingx": "PERP",
-    "asterdex": "PERP",
-    "lither": "PERP",
 }
 
 # Anti-spam settings
@@ -166,31 +144,18 @@ BATCH_SIZE = 50  # Number of symbols to process per batch (deprecated - use EXCH
 # Rate limit (seconds) to sleep between batches for each exchange
 EXCHANGE_RATE_LIMITS = {
     "hyperliquid": 0.1,
-    "kucoin_futures": 0.2,
-    "kucoin_spot": 0.2,
-    "bingx": 0.1,
-    "asterdex": 0.1,
-    "lither": 0.1,
 }
 
 # Exchange-specific scan configuration for rate limiting
 EXCHANGE_SCAN_CONFIG = {
     "hyperliquid": {"batch_size": 10, "batch_delay": 0.1, "symbol_delay": 0.05},
-    "kucoin_futures": {"batch_size": 3, "batch_delay": 0.5, "symbol_delay": 0.15},
-    "kucoin_spot": {"batch_size": 3, "batch_delay": 0.5, "symbol_delay": 0.15},
-    "bingx": {"batch_size": 10, "batch_delay": 0.1, "symbol_delay": 0.05},
 }
 
 DEFAULT_SCAN_CONFIG = {"batch_size": 5, "batch_delay": 0.2, "symbol_delay": 0.1}
 
 # Parallel scanning configuration
 EXCHANGE_CONCURRENCY = {
-    "kucoin_futures": 8,   # KuCoin rate limit: ~30 req/s
-    "kucoin_spot": 8,
     "hyperliquid": 20,     # Hyperliquid is fast
-    "bingx": 20,           # BingX is fast
-    "asterdex": 10,
-    "lither": 10,
 }
 
 # Priority tickers — scanned first in each cycle

@@ -14,7 +14,7 @@ The scanner monitors bid and ask sides of the order book, calculating cumulative
 
 ## ✨ Features
 
-- **Multi-Exchange Support**: Monitors Hyperliquid, KuCoin, BingX, and more
+- **Multi-Exchange Support**: Monitors Hyperliquid for high liquidity zones
 - **Real-Time Alerts**: Instant Telegram notifications when densities are detected
 - **Hierarchical Settings**: Global → Exchange → Ticker-specific configuration
 - **Smart Cooldown**: Prevents alert spam with 5-minute cooldowns per symbol/side
@@ -27,12 +27,8 @@ The scanner monitors bid and ask sides of the order book, calculating cumulative
 ## 📋 Supported Exchanges
 
 - **Hyperliquid** (`hyperliquid`)
-- **KuCoin** (`kucoin`)
-- **BingX** (`bingx`)
-- **AsterDex** (`asterdex`) - if available in CCXT
-- **Lither** (`lither`) - if available in CCXT
 
-*Note: Exchanges not available in CCXT will be gracefully skipped with a warning.*
+*Note: This scanner is configured to work exclusively with Hyperliquid.*
 
 ## 🔧 Installation
 
@@ -155,20 +151,18 @@ The scanner uses a hierarchical settings resolution system:
 
 **Priority (highest to lowest):**
 1. **Ticker Override** - Specific settings for individual tickers (e.g., BTC)
-2. **Exchange Setting** - Settings for a specific exchange (e.g., KuCoin)
+2. **Exchange Setting** - Settings for Hyperliquid
 3. **Global Setting** - Default fallback settings
 
 ### Example Configuration
 
 ```
 Global min_size: $1,000,000
-├── Exchange: KuCoin min_size: $500,000 (overrides global for KuCoin)
-└── Ticker: BTC min_size: $30,000,000 (overrides all for BTC on any exchange)
+└── Ticker: BTC min_size: $30,000,000 (overrides global for BTC)
 ```
 
 This allows you to:
 - Set conservative defaults globally
-- Lower thresholds for smaller exchanges
 - Raise thresholds for high-volume pairs
 
 ## 🔍 How Density Detection Works
@@ -221,9 +215,8 @@ All settings are persisted to `settings.json`:
     }
   },
   "exchange_settings": {
-    "kucoin": {
-      "min_size": 500000,
-      "distance_pct": 0.8
+    "hyperliquid": {
+      "min_size": 1000000
     }
   },
   "authorized_users": [123456789],
@@ -293,9 +286,8 @@ Log format includes timestamps, logger names, and log levels.
 
 1. **Start Conservative**: Begin with higher min_size thresholds
 2. **Monitor Logs**: Watch for rate limit warnings
-3. **Adjust Per Exchange**: Smaller exchanges may need lower thresholds
-4. **Use Blacklist**: Exclude low-quality or manipulated pairs
-5. **Ticker Overrides**: Set higher thresholds for major pairs like BTC/ETH
+3. **Use Blacklist**: Exclude low-quality or manipulated pairs
+4. **Ticker Overrides**: Set higher thresholds for major pairs like BTC/ETH
 
 ## 🤝 Contributing
 

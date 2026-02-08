@@ -53,18 +53,6 @@
   ],
   "chat_id": "-1003892216818",
   "exchanges": {
-    "kucoin_futures": {
-      "min_size": 300000,
-      "ticker_overrides": {},
-      "blacklist": [],
-      "min_lifetime": 60
-    },
-    "kucoin_spot": {
-      "min_size": 150000,
-      "ticker_overrides": {},
-      "blacklist": [],
-      "min_lifetime": 60
-    },
     "hyperliquid": {
       "min_size": 350000,
       "ticker_overrides": {},
@@ -73,26 +61,6 @@
         "FXRP"
       ],
       "min_lifetime": 0
-    },
-    "asterdex": {
-      "min_size": 200000,
-      "ticker_overrides": {},
-      "blacklist": [],
-      "min_lifetime": 0
-    },
-    "lither": {
-      "min_size": 200000,
-      "ticker_overrides": {},
-      "blacklist": [],
-      "min_lifetime": 0
-    },
-    "bingx": {
-      "min_size": 500000,
-      "ticker_overrides": {},
-      "blacklist": [
-        "USD1"
-      ],
-      "min_lifetime": 60
     }
   }
 }

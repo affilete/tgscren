@@ -747,14 +747,9 @@ class DensityScanner:
                     logger.debug(f"Rate limited on {exchange_name}/{symbol}, waiting 5s")
                     await asyncio.sleep(5)
                     return False
-                # For BingX, "symbol not found" errors are expected and should be logged as DEBUG
-                error_msg = str(e).lower()
-                if exchange_name == "bingx" and ("symbol" in error_msg and "not found" in error_msg):
-                    logger.debug(f"Symbol {symbol} not found on {exchange_state.label}")
-                    return False
-                else:
-                    logger.debug(f"Exchange error {exchange_name}/{symbol}: {e}")
-                    return False
+                # Log other exchange errors as debug
+                logger.debug(f"Exchange error {exchange_name}/{symbol}: {e}")
+                return False
             except ccxt_async.BaseError as e:
                 logger.debug(f"Exchange error for {symbol} on {exchange_state.label}: {e}")
                 return False
