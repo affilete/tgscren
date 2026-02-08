@@ -38,7 +38,7 @@ except ValueError as e:
 
 # Supported Exchanges (name -> ccxt_id and label)
 SUPPORTED_EXCHANGES = {
-    "hyperliquid": {"ccxt_id": "hyperliquid", "label": "Hyperliquid", "enabled": True},
+    "hyperliquid": {"ccxt_id": "hyperliquid", "label": "Hyperliquid"},
 }
 
 # Default Exchange Settings
@@ -119,7 +119,7 @@ EXCHANGE_TIMEOUT = 30000  # 30 seconds in milliseconds
 
 # Exchange-specific depth limits
 EXCHANGE_DEPTH_LIMITS = {
-    "hyperliquid": 100,  # Hyperliquid max levels
+    "hyperliquid": 20,  # Public API max = 20 levels
 }
 
 # Exchange Trade URLs for clickable links
