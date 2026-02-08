@@ -1002,14 +1002,14 @@ class DensityScanner:
                         # Process alerts
                         if self.settings.alerts_enabled:
                             for alert in densities:
-                                lifetime = self._get_density_lifetime(
+                                lifetime = await self._get_density_lifetime(
                                     exchange_name, symbol, alert.side, alert.price
                                 )
                                 alert.lifetime_seconds = lifetime
                                 
-                                self._mark_density_seen(exchange_name, symbol, alert.side, alert.price)
+                                await self._mark_density_seen(exchange_name, symbol, alert.side, alert.price)
                                 
-                                should_send, reason = self._should_send_alert(
+                                should_send, reason = await self._should_send_alert(
                                     exchange_name, symbol, alert.side, alert.volume, alert.price
                                 )
                                 
@@ -1017,7 +1017,7 @@ class DensityScanner:
                                     min_lifetime = self.settings.get_exchange_min_lifetime(exchange_name)
                                     if alert.lifetime_seconds >= min_lifetime:
                                         self.alert_callback(alert)
-                                        self._set_cooldown(exchange_name, symbol, alert.side, alert.volume, alert.price)
+                                        await self._set_cooldown(exchange_name, symbol, alert.side, alert.volume, alert.price)
                                         logger.info(f"WS Alert ({reason}): {exchange_state.label} {symbol} {alert.side} ${alert.volume:,.0f}")
                         
                         reconnect_count = 0  # Reset on success
@@ -1131,7 +1131,7 @@ class DensityScanner:
                     exchange_state.consecutive_errors += 1
         
         # After scanning, clean up densities that weren't seen
-        self._cleanup_missing_densities()
+        await self._cleanup_missing_densities()
     
     async def _scan_all_exchanges_rest(self, exchange_states: list):
         """Scan specific exchanges using REST API concurrently."""
