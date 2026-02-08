@@ -3,17 +3,24 @@ Configuration constants and defaults for the cryptocurrency density scanner.
 """
 
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
 
+# Check for .env file existence
+env_path = Path('.env')
+if not env_path.exists():
+    print("⚠️ WARNING: .env file not found! Create it from .env.example")
+    print("Required variables: BOT_TOKEN, OWNER_USER_ID, DEFAULT_CHAT_ID")
+
 # Telegram Bot Configuration
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-if not BOT_TOKEN:
+if not BOT_TOKEN or BOT_TOKEN == "your_bot_token_here":
     raise ValueError(
-        "BOT_TOKEN environment variable is required. "
-        "Please set it in your .env file or environment."
+        "❌ BOT_TOKEN is not set or is placeholder value. "
+        "Please set a valid token in .env file"
     )
 
 DEFAULT_CHAT_ID = os.environ.get("DEFAULT_CHAT_ID", "-1001234567890")  # Placeholder - user should replace
@@ -23,16 +30,11 @@ OWNER_USER_ID_STR = os.environ.get("OWNER_USER_ID", "0")
 try:
     OWNER_USER_ID = int(OWNER_USER_ID_STR)
     if OWNER_USER_ID == 0:
-        import warnings
-        warnings.warn(
-            "OWNER_USER_ID is set to 0. This effectively disables authorization. "
-            "Please set OWNER_USER_ID to your Telegram user ID in .env file.",
-            UserWarning
-        )
-except ValueError:
+        raise ValueError("OWNER_USER_ID cannot be 0")
+except ValueError as e:
     raise ValueError(
-        f"OWNER_USER_ID must be a valid integer, got: {OWNER_USER_ID_STR}"
-    )
+        f"❌ OWNER_USER_ID must be a valid Telegram user ID, got: {OWNER_USER_ID_STR}"
+    ) from e
 
 # Supported Exchanges (name -> ccxt_id and label)
 SUPPORTED_EXCHANGES = {

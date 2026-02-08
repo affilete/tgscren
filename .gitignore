@@ -1,6 +1,16 @@
 # Environment variables
 .env
 
+# Encryption key
+.encryption_key
+
+# Settings with sensitive data
+settings.json
+
+# Logs
+*.log
+scanner.log
+
 # Python
 __pycache__/
 *.py[cod]
@@ -35,13 +45,6 @@ env/
 *.swp
 *.swo
 *~
-
-# Logs
-*.log
-scanner.log
-
-# Settings
-settings.json
 
 # Test databases
 :memory:

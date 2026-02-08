@@ -1,7 +1,19 @@
+# Core dependencies
 ccxt>=4.0.0
 python-telegram-bot>=20.0
 python-dotenv>=1.0.0
 
+# Security
+cryptography>=41.0.0
+
+# Retry mechanism
+tenacity>=8.2.0
+
 # Optional: WebSocket support for real-time orderbook streaming (significantly faster)
 # Uncomment to enable WebSocket support:
 # ccxt[pro]>=4.0.0
+
+# Optional: Development tools
+# pylint>=3.0.0
+# mypy>=1.7.0
+# black>=23.12.0

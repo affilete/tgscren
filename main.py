@@ -6,12 +6,25 @@ Runs the Telegram bot and scanner concurrently in a single async event loop.
 import argparse
 import asyncio
 import logging
+import signal
 import sys
 from pathlib import Path
 
 from settings_manager import SettingsManager
 from scanner import DensityScanner, DensityAlert
 from bot import build_bot_app
+
+
+class GracefulKiller:
+    """Handle graceful shutdown on SIGINT and SIGTERM."""
+    def __init__(self):
+        self.kill_now = False
+        signal.signal(signal.SIGINT, self.exit_gracefully)
+        signal.signal(signal.SIGTERM, self.exit_gracefully)
+    
+    def exit_gracefully(self, signum, frame):
+        logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+        self.kill_now = True
 
 
 def setup_logging():
@@ -49,6 +62,8 @@ async def async_main():
     logger.info("Starting Cryptocurrency Density Scanner")
     logger.info("=" * 60)
 
+    killer = GracefulKiller()
+
     settings = SettingsManager("settings.json")
     logger.info("Settings loaded")
 
@@ -62,7 +77,13 @@ async def async_main():
     alert_queue = asyncio.Queue()
 
     def alert_callback(alert: DensityAlert):
-        alert_queue.put_nowait(alert)
+        """Alert callback with exception handling."""
+        try:
+            alert_queue.put_nowait(alert)
+        except asyncio.QueueFull:
+            logger.error(f"Alert queue is full! Dropping alert for {alert.symbol}")
+        except Exception as e:
+            logger.error(f"Failed to queue alert: {e}")
 
     async def process_alerts():
         while True:
@@ -92,17 +113,30 @@ async def async_main():
         alert_task = asyncio.create_task(process_alerts())
 
         try:
-            await scanner_task
+            # Monitor for shutdown signal
+            while not killer.kill_now:
+                await asyncio.sleep(1)
+                if scanner_task.done():
+                    break
+            
+            if killer.kill_now:
+                logger.info("Shutdown requested, stopping tasks...")
+        
         except asyncio.CancelledError:
             pass
         finally:
             logger.info("Shutting down...")
             scanner.stop()
+            
+            scanner_task.cancel()
             alert_task.cancel()
-            try:
-                await alert_task
-            except asyncio.CancelledError:
-                pass
+            
+            await asyncio.gather(
+                scanner_task,
+                alert_task,
+                return_exceptions=True
+            )
+            
             await bot_app.updater.stop()
             await bot_app.stop()
             await bot_app.shutdown()

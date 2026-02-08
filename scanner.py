@@ -6,6 +6,7 @@ import asyncio
 import logging
 import time
 import random
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Callable, Dict, Set, Tuple
@@ -218,6 +219,9 @@ class DensityScanner:
         self._running = False
         self._exchanges: Dict[str, ExchangeState] = {}
         
+        # Lock for thread-safe access to tracker dictionaries
+        self._tracker_lock = asyncio.Lock()
+        
         # Alert cooldown tracking: (exchange, symbol, side) -> (last_alert_time, last_size, last_price)
         self._alert_cooldowns: Dict[Tuple[str, str, str], Tuple[float, float, float]] = {}
         
@@ -227,8 +231,16 @@ class DensityScanner:
         # Miss counter for cleanup: (exchange, symbol, side, price_level) -> miss_count
         self._miss_counter: Dict[Tuple[str, str, str, float], int] = {}
         
-        # Contract size cache: "exchange:symbol" -> contract_size
-        self._contract_size_cache: Dict[str, float] = {}
+        # Contract size cache with LRU eviction: "exchange:symbol" -> contract_size
+        self._contract_size_cache: OrderedDict = OrderedDict()
+        self._cache_max_size = 1000
+        
+        # Market cache with TTL: exchange_name -> (markets_dict, cached_at_timestamp)
+        self._market_cache: Dict[str, Tuple[dict, float]] = {}
+        self._cache_ttl = 300  # 5 minutes
+        
+        # Scan counter for periodic memory cleanup
+        self._scan_count = 0
         
         logger.info("DensityScanner initialized")
     
@@ -310,6 +322,17 @@ class DensityScanner:
         if exchange_state.markets_loaded:
             return
         
+        cache_key = exchange_state.name
+        
+        # Check market cache
+        if cache_key in self._market_cache:
+            markets, cached_at = self._market_cache[cache_key]
+            if time.time() - cached_at < self._cache_ttl:
+                exchange_state.symbols = markets
+                exchange_state.markets_loaded = True
+                logger.debug(f"Using cached markets for {exchange_state.label}")
+                return
+        
         try:
             logger.info(f"Loading markets for {exchange_state.label}...")
             
@@ -360,6 +383,9 @@ class DensityScanner:
             # Sort symbols by priority (priority tickers first)
             exchange_state.symbols = self._sort_symbols_by_priority(exchange_state.symbols)
             
+            # Cache the filtered symbols
+            self._market_cache[cache_key] = (exchange_state.symbols.copy(), time.time())
+            
             # Clear contract size cache for this exchange after successful market load
             keys_to_clear = [k for k in self._contract_size_cache if k.startswith(f"{exchange_state.name}:")]
             for k in keys_to_clear:
@@ -394,10 +420,17 @@ class DensityScanner:
         best_bid = bids[0][0] if bids else 0
         best_ask = asks[0][0] if asks else 0
         
+        # Division by zero check
         if best_bid == 0 or best_ask == 0:
+            logger.debug(f"Invalid mid price for {symbol}: bid={best_bid}, ask={best_ask}")
             return alerts
         
         mid_price = (best_bid + best_ask) / 2
+        
+        # Additional safety check
+        if mid_price <= 0:
+            logger.error(f"Invalid mid_price={mid_price} for {symbol}")
+            return alerts
         
         # Calculate distance threshold
         max_distance = mid_price * (distance_pct / 100)
@@ -468,24 +501,26 @@ class DensityScanner:
         
         return alerts
     
-    def _check_cooldown(self, exchange: str, symbol: str, side: str) -> bool:
+    async def _check_cooldown(self, exchange: str, symbol: str, side: str) -> bool:
         """Check if alert is on cooldown. Returns True if on cooldown."""
         key = (exchange, symbol, side)
         current_time = time.time()
         
-        if key in self._alert_cooldowns:
-            last_alert_time = self._alert_cooldowns[key][0]
-            if current_time - last_alert_time < ALERT_COOLDOWN:
-                return True
+        async with self._tracker_lock:
+            if key in self._alert_cooldowns:
+                last_alert_time = self._alert_cooldowns[key][0]
+                if current_time - last_alert_time < ALERT_COOLDOWN:
+                    return True
         
         return False
     
-    def _set_cooldown(self, exchange: str, symbol: str, side: str, size: float, price: float):
+    async def _set_cooldown(self, exchange: str, symbol: str, side: str, size: float, price: float):
         """Set cooldown for an alert with size and price tracking."""
         key = (exchange, symbol, side)
-        self._alert_cooldowns[key] = (time.time(), size, price)
+        async with self._tracker_lock:
+            self._alert_cooldowns[key] = (time.time(), size, price)
     
-    def _should_send_alert(self, exchange: str, symbol: str, side: str, size: float, price: float) -> Tuple[bool, str]:
+    async def _should_send_alert(self, exchange: str, symbol: str, side: str, size: float, price: float) -> Tuple[bool, str]:
         """
         Check if alert should be sent based on anti-spam rules.
         Returns (should_send, reason).
@@ -500,100 +535,104 @@ class DensityScanner:
         key = (exchange, symbol, side)
         current_time = time.time()
         
-        # No previous alert - send it
-        if key not in self._alert_cooldowns:
-            return (True, "first_alert")
-        
-        last_alert_time, last_size, last_price = self._alert_cooldowns[key]
-        time_since_last = current_time - last_alert_time
-        
-        # Calculate changes
-        size_change_pct = abs(size - last_size) / last_size if last_size > 0 else 1.0
-        price_change_pct = abs(price - last_price) / last_price if last_price > 0 else 1.0
-        size_increase_pct = (size - last_size) / last_size if last_size > 0 else 0.0
-        
-        # Check if size surged (50%+ increase)
-        if size_increase_pct >= ALERT_SIZE_SURGE_THRESHOLD:
-            return (True, "size_surge")
-        
-        # Check if price changed significantly (0.5%+)
-        if price_change_pct >= ALERT_PRICE_CHANGE_THRESHOLD:
-            return (True, "price_change")
-        
-        # Check if cooldown expired
-        if time_since_last >= ALERT_COOLDOWN_SECONDS:
-            return (True, "cooldown_expired")
-        
-        # Within cooldown and no significant changes
-        if size_change_pct < ALERT_SIZE_CHANGE_THRESHOLD:
+        async with self._tracker_lock:
+            # No previous alert - send it
+            if key not in self._alert_cooldowns:
+                return (True, "first_alert")
+            
+            last_alert_time, last_size, last_price = self._alert_cooldowns[key]
+            time_since_last = current_time - last_alert_time
+            
+            # Calculate changes
+            size_change_pct = abs(size - last_size) / last_size if last_size > 0 else 1.0
+            price_change_pct = abs(price - last_price) / last_price if last_price > 0 else 1.0
+            size_increase_pct = (size - last_size) / last_size if last_size > 0 else 0.0
+            
+            # Check if size surged (50%+ increase)
+            if size_increase_pct >= ALERT_SIZE_SURGE_THRESHOLD:
+                return (True, "size_surge")
+            
+            # Check if price changed significantly (0.5%+)
+            if price_change_pct >= ALERT_PRICE_CHANGE_THRESHOLD:
+                return (True, "price_change")
+            
+            # Check if cooldown expired
+            if time_since_last >= ALERT_COOLDOWN_SECONDS:
+                return (True, "cooldown_expired")
+            
+            # Within cooldown and no significant changes
+            if size_change_pct < ALERT_SIZE_CHANGE_THRESHOLD:
+                return (False, "cooldown_active")
+            
+            # Size changed but not enough to override cooldown
             return (False, "cooldown_active")
-        
-        # Size changed but not enough to override cooldown
-        return (False, "cooldown_active")
     
-    def _get_density_lifetime(self, exchange: str, symbol: str, side: str, price: float) -> int:
+    async def _get_density_lifetime(self, exchange: str, symbol: str, side: str, price: float) -> int:
         """
         Get lifetime of a density in seconds.
         Densities are matched by exchange, symbol, side, and price within 0.1%.
         """
         current_time = time.time()
         
-        # Find matching density (price within 0.1%)
-        for key, first_seen in self._density_tracker.items():
-            tracked_exchange, tracked_symbol, tracked_side, tracked_price = key
+        async with self._tracker_lock:
+            # Find matching density (price within 0.1%)
+            for key, first_seen in self._density_tracker.items():
+                tracked_exchange, tracked_symbol, tracked_side, tracked_price = key
+                
+                if (tracked_exchange == exchange and 
+                    tracked_symbol == symbol and 
+                    tracked_side == side):
+                    # Check if price is within 0.1%
+                    price_diff_pct = abs(price - tracked_price) / tracked_price if tracked_price > 0 else 1.0
+                    if price_diff_pct <= 0.001:  # 0.1%
+                        return int(current_time - first_seen)
             
-            if (tracked_exchange == exchange and 
-                tracked_symbol == symbol and 
-                tracked_side == side):
-                # Check if price is within 0.1%
-                price_diff_pct = abs(price - tracked_price) / tracked_price if tracked_price > 0 else 1.0
-                if price_diff_pct <= 0.001:  # 0.1%
-                    return int(current_time - first_seen)
-        
-        # New density - track it
-        key = (exchange, symbol, side, price)
-        self._density_tracker[key] = current_time
-        self._miss_counter[key] = 0
-        
-        return 0
+            # New density - track it
+            key = (exchange, symbol, side, price)
+            self._density_tracker[key] = current_time
+            self._miss_counter[key] = 0
+            
+            return 0
     
-    def _mark_density_seen(self, exchange: str, symbol: str, side: str, price: float):
+    async def _mark_density_seen(self, exchange: str, symbol: str, side: str, price: float):
         """Mark a density as seen (reset miss counter)."""
-        # Find matching density
-        for key in list(self._miss_counter.keys()):
-            tracked_exchange, tracked_symbol, tracked_side, tracked_price = key
-            
-            if (tracked_exchange == exchange and 
-                tracked_symbol == symbol and 
-                tracked_side == side):
-                # Check if price is within 0.1%
-                price_diff_pct = abs(price - tracked_price) / tracked_price if tracked_price > 0 else 1.0
-                if price_diff_pct <= 0.001:  # 0.1%
-                    self._miss_counter[key] = 0
-                    return
+        async with self._tracker_lock:
+            # Find matching density
+            for key in list(self._miss_counter.keys()):
+                tracked_exchange, tracked_symbol, tracked_side, tracked_price = key
+                
+                if (tracked_exchange == exchange and 
+                    tracked_symbol == symbol and 
+                    tracked_side == side):
+                    # Check if price is within 0.1%
+                    price_diff_pct = abs(price - tracked_price) / tracked_price if tracked_price > 0 else 1.0
+                    if price_diff_pct <= 0.001:  # 0.1%
+                        self._miss_counter[key] = 0
+                        return
     
-    def _cleanup_missing_densities(self):
+    async def _cleanup_missing_densities(self):
         """Clean up densities that haven't been seen for DENSITY_MISS_LIMIT scans."""
-        keys_to_remove = []
-        
-        for key, miss_count in self._miss_counter.items():
-            if miss_count >= DENSITY_MISS_LIMIT:
-                keys_to_remove.append(key)
-        
-        for key in keys_to_remove:
-            if key in self._density_tracker:
-                del self._density_tracker[key]
-            if key in self._miss_counter:
-                del self._miss_counter[key]
+        async with self._tracker_lock:
+            keys_to_remove = []
             
-            # Also clean up cooldown for this density
-            exchange, symbol, side, _ = key
-            cooldown_key = (exchange, symbol, side)
-            if cooldown_key in self._alert_cooldowns:
-                del self._alert_cooldowns[cooldown_key]
-        
-        if keys_to_remove:
-            logger.debug(f"Cleaned up {len(keys_to_remove)} missing densities")
+            for key, miss_count in self._miss_counter.items():
+                if miss_count >= DENSITY_MISS_LIMIT:
+                    keys_to_remove.append(key)
+            
+            for key in keys_to_remove:
+                if key in self._density_tracker:
+                    del self._density_tracker[key]
+                if key in self._miss_counter:
+                    del self._miss_counter[key]
+                
+                # Also clean up cooldown for this density
+                exchange, symbol, side, _ = key
+                cooldown_key = (exchange, symbol, side)
+                if cooldown_key in self._alert_cooldowns:
+                    del self._alert_cooldowns[cooldown_key]
+            
+            if keys_to_remove:
+                logger.debug(f"Cleaned up {len(keys_to_remove)} missing densities")
     
     async def _scan_symbol(self, exchange_state: ExchangeState, symbol: str):
         """Scan a single symbol on an exchange. Returns True if successful."""
@@ -692,6 +731,8 @@ class DensityScanner:
                 cache_key = f"{exchange_name}:{symbol}"
                 if cache_key in self._contract_size_cache:
                     contract_size = self._contract_size_cache[cache_key]
+                    # Move to end for LRU
+                    self._contract_size_cache.move_to_end(cache_key)
                 else:
                     contract_size = 1.0
                     try:
@@ -727,8 +768,13 @@ class DensityScanner:
                     if contract_size != 1.0:
                         logger.info(f"Using contract size {contract_size} for {symbol} on {exchange_state.label}")
                     
-                    # Cache the contract size
+                    # Cache the contract size with LRU eviction
                     self._contract_size_cache[cache_key] = contract_size
+                    
+                    # LRU eviction: remove oldest items if cache exceeds max size
+                    if len(self._contract_size_cache) > self._cache_max_size:
+                        # Remove oldest item (first item in OrderedDict)
+                        self._contract_size_cache.popitem(last=False)
                 
                 # Compute densities (using exchange_name key for URL/type lookups, not display label)
                 densities = self._compute_densities(
@@ -744,7 +790,7 @@ class DensityScanner:
                 if self.settings.alerts_enabled:
                     for alert in densities:
                         # Get lifetime for this density
-                        lifetime = self._get_density_lifetime(
+                        lifetime = await self._get_density_lifetime(
                             exchange_name,
                             symbol,
                             alert.side,
@@ -753,10 +799,10 @@ class DensityScanner:
                         alert.lifetime_seconds = lifetime
                         
                         # Mark density as seen
-                        self._mark_density_seen(exchange_name, symbol, alert.side, alert.price)
+                        await self._mark_density_seen(exchange_name, symbol, alert.side, alert.price)
                         
                         # Check if we should send alert (anti-spam)
-                        should_send, reason = self._should_send_alert(
+                        should_send, reason = await self._should_send_alert(
                             exchange_name,
                             symbol,
                             alert.side,
@@ -772,10 +818,20 @@ class DensityScanner:
                                 continue
                             
                             self.alert_callback(alert)
-                            self._set_cooldown(exchange_name, symbol, alert.side, alert.volume, alert.price)
+                            await self._set_cooldown(exchange_name, symbol, alert.side, alert.volume, alert.price)
                             logger.info(f"Alert ({reason}): {exchange_state.label} {symbol} {alert.side} ${alert.volume:,.0f} (lifetime: {alert.lifetime_seconds}s)")
                         else:
                             logger.debug(f"Skipped alert ({reason}): {exchange_state.label} {symbol} {alert.side} ${alert.volume:,.0f}")
+                
+                # Explicit memory cleanup
+                orderbook = None
+                
+                # Periodic garbage collection
+                self._scan_count += 1
+                if self._scan_count % 1000 == 0:
+                    import gc
+                    gc.collect()
+                    logger.debug(f"Memory cleanup at scan #{self._scan_count}")
                 
                 return True
             
@@ -1044,8 +1100,9 @@ class DensityScanner:
     async def _scan_all_exchanges_rest(self, exchange_states: list):
         """Scan specific exchanges using REST API concurrently."""
         # Increment miss counters before scan (will be reset for seen densities)
-        for key in list(self._miss_counter.keys()):
-            self._miss_counter[key] = self._miss_counter.get(key, 0) + 1
+        async with self._tracker_lock:
+            for key in list(self._miss_counter.keys()):
+                self._miss_counter[key] = self._miss_counter.get(key, 0) + 1
         
         # Build tasks for specified exchanges
         tasks = []
@@ -1069,7 +1126,7 @@ class DensityScanner:
                     exchange_state.consecutive_errors += 1
         
         # After scanning, clean up densities that weren't seen
-        self._cleanup_missing_densities()
+        await self._cleanup_missing_densities()
     
     async def _ensure_connection(self, exchange_state: ExchangeState) -> bool:
         """Check and restore connection to exchange if needed."""
